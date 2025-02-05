@@ -59,7 +59,9 @@ class GameManager:
             deck_list = deck_list[6:]
             logging.info(f"Player {player.player_id} was dealt: {player.hand}")
 
-    def make_claim(self, player, claim_type, claim_value, cards_to_reveal):
+    def make_claim(self, player, claim_type, claim_value: int,
+                   cards_to_reveal: list) -> bool:
+        """Make a claim and reveal the cards if valid."""
         if self.current_bid is None or self.is_stronger_claim(claim_type,
                                                               claim_value):
             self.current_bid = (claim_type, claim_value)
@@ -73,7 +75,8 @@ class GameManager:
             logging.info("Invalid claim: Must be stronger than the current.")
             return False
 
-    def is_stronger_claim(self, claim_type, claim_value):
+    def is_stronger_claim(self, claim_type, claim_value: int) -> bool:
+        """Check if the new claim is stronger than the current one."""
         if self.current_bid is None:
             return True
         current_type, current_value = self.current_bid
@@ -86,6 +89,7 @@ class GameManager:
         return new_strength > current_strength
 
     def doubt_claim(self, player):
+        """Doubt the current claim and reveal the cards."""
         logging.info(f"Player {player.player_id} doubts the claim.")
         if self.check_claim():
             logging.info("Claim was valid. Challenger loses.")
@@ -94,7 +98,8 @@ class GameManager:
             logging.info("Claim was invalid. Claimer loses.")
             return self.players[self.current_player]
 
-    def check_claim(self):
+    def check_claim(self) -> bool:
+        """Check if the current claim is valid."""
         claim_type, claim_value = self.current_bid
         total = 0
 
@@ -107,7 +112,8 @@ class GameManager:
 
         return total >= claim_value
 
-    def reveal_cards(self, player, cards):
+    def reveal_cards(self, player, cards: list) -> None:
+        """Reveal the given cards from the player's hand."""
         for card in cards:
             if card in player.hand:
                 player.hand.remove(card)
@@ -117,10 +123,10 @@ class GameManager:
                 logging.info(f"Player {player.player_id} does not have " +
                              f"a {card} to reveal.")
 
-    def next_turn(self):
+    def next_turn(self) -> None:
         self.current_player = (self.current_player + 1) % len(self.players)
 
-    def simulate_game(self):
+    def simulate_game(self) -> int:
         """Simulate a full game."""
         while True:
             player = self.players[self.current_player]
@@ -146,11 +152,13 @@ class GameManager:
 
 
 class ZeroOrderAgent:
-    def __init__(self, player_id):
+    def __init__(self, player_id: int) -> None:
+        """Initialize the Zero-Order Agent with a player ID."""
         self.player_id = player_id
         self.hand = []
 
-    def calculate_probabilities(self, game):
+    def calculate_probabilities(self, game: GameManager) -> dict:
+        """Calculate the probability of each card type in the deck."""
         total_deck = {
             'alive_cats': 20,
             'dead_cats': 20,
@@ -183,7 +191,8 @@ class ZeroOrderAgent:
 
         return probabilities
 
-    def make_claim(self):
+    def make_claim(self) -> tuple:
+        """Make a claim based on the most common card in the hand."""
         card_counts = defaultdict(int)
         for card in self.hand:
             card_counts[card] += 1
@@ -195,7 +204,8 @@ class ZeroOrderAgent:
             card for card in self.hand if card == claim_type or card == 'HUP']
         return claim_type, claim_value, cards_to_reveal
 
-    def doubt_claim(self, game):
+    def doubt_claim(self, game: GameManager) -> str:
+        """Doubt based on the current claim and the probabilities."""
         if game.current_bid is None:
             return 'pass'
 
@@ -210,7 +220,8 @@ class ZeroOrderAgent:
         else:
             return 'pass'
 
-    def choose_action(self, game):
+    def choose_action(self, game: GameManager) -> str:
+        """Choose an action based on the current game state."""
         if game.current_bid is None:
             return 'claim'
         else:
@@ -219,10 +230,11 @@ class ZeroOrderAgent:
 
 class FirstOrderAgent(ZeroOrderAgent):
     def __init__(self, player_id):
+        """Initialize the First-Order Agent with opponent history."""
         super().__init__(player_id)
         self.opponent_history = []
 
-    def interpret_opponent_behavior(self, game):
+    def interpret_opponent_behavior(self, game: GameManager) -> None:
         """Analyze opponent's past claims/doubts to infer their hand."""
         if not self.opponent_history:
             return None
@@ -252,7 +264,7 @@ class FirstOrderAgent(ZeroOrderAgent):
         logging.info(f"Opponent profile: {self.opponent_claim_profile}, " +
                      f"Doubt threshold: {self.opponent_doubt_threshold}")
 
-    def predict_opponent_reaction(self, game):
+    def predict_opponent_reaction(self, game: GameManager) -> bool:
         """Predict if opponent will doubt the current claim."""
         if not self.opponent_history:
             return random.choice([True, False])  # random guess
@@ -268,7 +280,7 @@ class FirstOrderAgent(ZeroOrderAgent):
         else:
             return False  # likely to accept
 
-    def make_claim(self):
+    def make_claim(self) -> tuple:
         """Strategic claim based on opponent's profile."""
         # use zero-order logic as fallback
         base_claim_type, base_claim_value, cards_to_reveal = (
@@ -284,7 +296,7 @@ class FirstOrderAgent(ZeroOrderAgent):
         else:
             return base_claim_type, base_claim_value, cards_to_reveal
 
-    def doubt_claim(self, game):
+    def doubt_claim(self, game: GameManager) -> str:
         """Doubt based on predictive model."""
         self.interpret_opponent_behavior(game)
         if self.predict_opponent_reaction(game):
@@ -292,12 +304,12 @@ class FirstOrderAgent(ZeroOrderAgent):
         else:
             return 'pass'
 
-    def choose_action(self, game):
+    def choose_action(self, game: GameManager) -> str:
         """Override action choice with predictive logic."""
         if game.current_bid is None:
             return 'claim'
         else:
-            # Update opponent history before deciding
+            # update opponent history before deciding
             opponent = game.players[(self.player_id + 1) % len(game.players)]
             last_action = (
                 opponent.last_action
@@ -309,7 +321,8 @@ class FirstOrderAgent(ZeroOrderAgent):
             return 'doubt' if self.doubt_claim(game) == 'doubt' else 'claim'
 
 
-def evaluate_agents(num_games):
+def evaluate_agents(num_games: int) -> None:
+    """Evaluate the success rate of the two agents."""
     zero_order_wins = 0
     first_order_wins = 0
 

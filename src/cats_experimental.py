@@ -577,5 +577,4 @@ def evaluate_agents(num_games: int) -> None:
     plt.show()
 
 
-# Run evaluation
 evaluate_agents(1000)
