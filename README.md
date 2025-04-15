@@ -11,7 +11,7 @@ This repository implements a variant of the **Schrödinger's Cats** card game. I
    These agents rely primarily on their own observation (their hand and a shared central pile). There are two variants of zero-order agents, one that does not have any explicit memory and one that does, in order to observe whether zero-order agents improve. The explicit memory is incorporated as past actions to decide whether to make a claim or doubt the current one.
 
 2. **First-Order Agents (FirstOrderAgent):**  
-   These agents extend the zero-order logic by also trying to interpret and predict their opponent’s behavior. They build an opponent profile based on past claims and doubts to adjust their own claims (making them “safer”) or decide to doubt when appropriate.
+   These agents extend the zero-order logic by incorporating interpretative and predictive modelling of their opponent. The agent creates a profile of their opponent, and through Monte Carlo simulations, it assesses how their opponent might react in certain scenarios, thus increasing their winning chances.
 
 The **GameManager** class controls the game flow: dealing cards, tracking bids (claims), handling turns, revealing cards, and determining the winner. Finally, the `evaluate_agents` function runs multiple simulations of the game, gathers metrics (win counts and learning curves), and produces graphs.
 
