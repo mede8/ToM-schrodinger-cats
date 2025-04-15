@@ -2,32 +2,33 @@
 File: cats_experimental.py
 Author: Andrei Medesan (a.medesan@student.rug.nl)
 Description: Implementation of the Schrödinger's Cats card game with
-the Evidence-Based variant and Explicit Memory in zero-order theory
-of mind agents. The game is played between two types of agents:
-Zero-order theory of mind agents against themselves, and first-order
-theory of mind agents.
+the Evidence-Based variant. The game simulates the game between two
+agents: a Zero-Order Agent and a First-Order Agent. Additionally, the
+zero-order agent is capable of learning from its own actions and
+the actions of the opponent threough explicit memory integration.
 """
 import random
 import logging
 import matplotlib.pyplot as plt
 from collections import defaultdict
-from typing import Union
+from typing import Union, Optional
 from pathlib import Path
 
 
+# setup directories for figures and logs
 root = Path(__file__).resolve().parent.parent
-# save details for figures
 fig_dir = root / 'figures'
 fig_dir.mkdir(parents=True, exist_ok=True)
-
-# logs details
 logs_dir = root / 'logs'
 logs_dir.mkdir(parents=True, exist_ok=True)
-logs_path = logs_dir / 'schrodingers_experimental.log'
+logs_path = logs_dir / 'schrodingers_cats_experiment.log'
 
 logging.basicConfig(filename=logs_path,
                     level=logging.INFO,
                     format='%(message)s')
+
+
+ClaimTuple = Optional[tuple[str, int, list[str]]]
 
 
 class ZeroOrderAgent:
@@ -40,11 +41,12 @@ class ZeroOrderAgent:
         """
         self.player_id = player_id
         self.hand = []
-        # excplit memory for zero-order agents
+        # explicit memory stores tuples of
+        # (action_type, action_details, outcome)
         self.memory = []
 
     def update_memory(self, action: tuple) -> None:
-        """Add an action to the agent's memory."""
+        """Add an action and its outcome to the agent's memory."""
         self.memory.append(action)
 
     def calculate_probabilities(self, game: 'GameManager') -> dict[str, float]:
@@ -87,8 +89,8 @@ class ZeroOrderAgent:
 
         return probabilities
 
-    def make_claim(self, current_bid: tuple[str, int] | None
-                   ) -> tuple[str, int, list[str]] | None:
+    def make_claim(self, current_bid: Optional[tuple[str, int]]
+                   ) -> Optional[tuple[str, int, list[str]]]:
         """
         Generate a claim based on the agent's hand and memory,
         ensuring it is stronger than the current bid.
@@ -102,29 +104,39 @@ class ZeroOrderAgent:
             if card in valid_claim_types:
                 card_counts[card] += 1
 
-        # fallback if hand has no valid claim types
         if not card_counts:
             return 'dead_cats', 1, []
 
-        # select claim type as the most frequent valid card in hand
         claim_type = max(card_counts, key=card_counts.get)
         base_value = card_counts[claim_type]
 
-        # cap claim value to maximum possible (total deck + HUP)
         max_possible = {
             'alive_cats': 24,  # 20 alive + 4 HUP
-            'dead_cats': 24,   # 20 dead + 4 HUP
+            'dead_cats': 24,  # 20 dead + 4 HUP
             'empty_boxes': 12  # 8 boxes + 4 HUP
         }[claim_type]
 
-        # adjust value with memory but ensure it does not exceed max_possible
-        past_doubts = [
-            action for action in self.memory if action[0] == 'doubt']
-        doubt_rate = len(past_doubts) / (len(self.memory) + 1e-6)
-        adjusted_value = min(
-            base_value + max(1 - int(doubt_rate * 2), 1), max_possible)
+        # adjust claim value based on past outcomes of similar claims
+        successful_claims = [
+            m[1][1] for m in self.memory
+            if m[0] == 'claim' and m[1][0] == claim_type and m[2] is None]
+        unsuccessful_claims = [
+            m[1][1] for m in self.memory
+            if m[0] == 'claim' and m[1][0] == claim_type and m[2] is not None]
 
-        # ensure claim is stronger than current bid
+        avg_successful = sum(
+            successful_claims) / (len(successful_claims) + 1e-6)
+        avg_unsuccessful = sum(
+            unsuccessful_claims) / (len(unsuccessful_claims) + 1e-6)
+
+        adjustment = 0
+        if successful_claims and base_value > avg_successful:
+            adjustment += 1
+        if unsuccessful_claims and base_value > avg_unsuccessful:
+            adjustment -= 1
+
+        adjusted_value = min(base_value + adjustment, max_possible)
+
         if current_bid:
             current_type, current_value = current_bid
             type_strength = {'empty_boxes': 2, 'alive_cats': 1, 'dead_cats': 0}
@@ -139,7 +151,6 @@ class ZeroOrderAgent:
                  if claim_type == 'empty_boxes' else adjusted_value)
             )
 
-            # force doubt if claim is weaker than current bid
             if new_strength <= required_strength:
                 return None
 
@@ -164,13 +175,32 @@ class ZeroOrderAgent:
             probabilities.get(claim_type, 0) + probabilities.get('HUP', 0)
         )
 
-        # use memory to adjust doubt threshold
-        past_doubts = [
-            action for action in self.memory if action[0] == 'doubt']
-        doubt_count = len(past_doubts)
-        adjusted_threshold = expected_cards + 2 * (1 + doubt_count / 10)
+        opponent_claims = [
+            m for m in self.memory
+            if m[0] == 'claim' and m[1][0] == claim_type]
+        successful_opponent_claims = sum(
+            1 for claim in opponent_claims if claim[2] is True)
+        total_opponent_claims = len(opponent_claims)
+        opponent_accuracy = (
+            successful_opponent_claims / (total_opponent_claims + 1e-6))
 
-        return 'doubt' if claim_value > adjusted_threshold else 'pass'
+        # adjust doubt threshold based on opponent's past accuracy
+        doubt_threshold = expected_cards + 1 + (1 - opponent_accuracy) * 3
+
+        # consider own past success/failure in doubting similar claims
+        past_doubts_on_type = [
+            m for m in self.memory
+            if m[0] == 'doubt' and m[1][0] == claim_type]
+        successful_own_doubts = sum(
+            1 for doubt in past_doubts_on_type if doubt[2] is False)
+        total_own_doubts = len(past_doubts_on_type)
+        own_doubt_success_rate = (
+            successful_own_doubts / (total_own_doubts + 1e-6))
+
+        # higher success -> lower threshold
+        doubt_threshold -= (own_doubt_success_rate - 0.5) * 2
+
+        return 'doubt' if claim_value > doubt_threshold else 'pass'
 
     def choose_action(self, game: 'GameManager') -> str:
         """
@@ -182,7 +212,6 @@ class ZeroOrderAgent:
         if game.current_bid is None:
             return 'claim'
         else:
-            # attempt to generate a valid claim
             claim_result = self.make_claim(game.current_bid)
             if claim_result is None:
                 return 'doubt'
@@ -193,82 +222,190 @@ class ZeroOrderAgent:
 class FirstOrderAgent(ZeroOrderAgent):
     def __init__(self, player_id: int) -> None:
         """
-        Initialize a first-order theory of mind agent with
-        an opponent profile.
-
+        Initialize a recursive first-order theory of mind agent that
+        reasons both about opponent behavior and about hidden card information.
         :param player_id: the player's ID.
         """
         super().__init__(player_id)
-        self.opponent_profile = {'doubt_threshold': 0,
-                                 'claim_patterns': defaultdict(list)}
+        # model of the opponent
+        self.opponent_model = {
+            'hand_belief': self._initialize_hand_belief(),
+            'memory_belief': []
+        }
 
-    def interpret_opponent_behavior(self) -> None:
-        """Analyze opponent's past claims/ doubts to infer their strategy."""
-        doubt_values = []
-        for action in self.memory:
-            if action[0] == 'doubt':
-                # action[1] is the doubted bid (type, value)
-                doubted_claim_type, doubted_claim_value = action[1]
-                doubt_values.append(doubted_claim_value)
-            elif action[0] == 'claim':
-                # action[1] is (claim_type, claim_value)
-                claim_type, claim_value = action[1]
-                self.opponent_profile['claim_patterns'][
-                    claim_type].append(claim_value)
-
-        if doubt_values:
-            self.opponent_profile['doubt_threshold'] = (
-                sum(doubt_values) / len(doubt_values)
-            )
-        else:
-            self.opponent_profile['doubt_threshold'] = 0
-
-    def predict_opponent_reaction(self, current_claim_value: int) -> bool:
-        """
-        Predict if opponent will doubt the current claim.
-
-        :param current_claim_value: the value of the current claim.
-        :return: True if the opponent will doubt, False otherwise.
-        """
-        safety_margin = self.opponent_profile['doubt_threshold'] * 0.1
-        return current_claim_value > (
-            self.opponent_profile['doubt_threshold'] - safety_margin)
-
-    def make_claim(self, current_bid: tuple[str, int] | None
-                   ) -> tuple[str, int, list[str]] | None:
-        # get base claim from zero-order logic
-        claim_type, claim_value, cards_to_reveal = (
-            super().make_claim(current_bid)
+    def _initialize_hand_belief(self) -> defaultdict[str, float]:
+        """Initialize a uniform belief over the opponent's possible hand."""
+        belief = defaultdict(float)
+        possible_cards = (
+            ['alive_cats'] * 20 + ['dead_cats'] * 20 +
+            ['empty_boxes'] * 8 + ['HUP'] * 4)
+        num_unknown_cards = (
+            len(possible_cards) - len(self.hand) -
+            (len(self.game_ref.central_pile)
+             if hasattr(self, 'game_ref') else 0)
         )
+        if num_unknown_cards > 0:
+            for card in possible_cards:
+                if (card not in self.hand and
+                    (not hasattr(self, 'game_ref') or
+                     card not in self.game_ref.central_pile)):
+                    # assuming opponent has 6 cards
+                    belief[card] += 1 / num_unknown_cards * 6
+        return belief
 
-        # use opponent's doubt threshold to refine claim
-        self.interpret_opponent_behavior()
-        if self.opponent_profile['doubt_threshold'] > 0:
-            # stay 10% below opponent's threshold to avoid triggering doubt
-            safe_value = (
-                min(claim_value, int(
-                    self.opponent_profile['doubt_threshold'] * 0.9))
-            )
-            return claim_type, safe_value, cards_to_reveal
-        else:
-            return claim_type, claim_value, cards_to_reveal
-
-    def choose_action(self, game: 'GameManager') -> str:
+    def update_opponent_model(self, action: tuple,
+                              game: 'GameManager') -> None:
         """
-        Override action choice with predictive logic.
+        Update the model of opponent's behavior based on observed actions.
+
+        :param action: the action to update the model with.
+        :param game: the game manager.
+        """
+        self.update_memory(action)
+        action_type, action_details = action[0], action[1]
+
+        # update hand belief (interpretative model)
+        if action_type == 'claim':
+            claim_type, claim_value = action_details
+            # if opponent claims many of a certain card,
+            # increase belief they have it
+            for card_type in self.opponent_model['hand_belief']:
+                if card_type == claim_type or card_type == 'HUP':
+                    self.opponent_model[
+                        'hand_belief'][card_type] *= (1 + 0.1 * claim_value)
+                else:
+                    self.opponent_model[
+                        'hand_belief'][card_type] *= (1 - 0.01 * claim_value)
+            # normalize belief
+            total_belief = sum(self.opponent_model['hand_belief'].values())
+            if total_belief > 0:
+                for card_type in self.opponent_model['hand_belief']:
+                    self.opponent_model[
+                        'hand_belief'][card_type] /= total_belief * 6
+        elif action_type == 'doubt':
+            # if opponent doubts,
+            # it might suggest they have fewer of the claimed card
+            if game.current_bid:
+                doubted_claim_type, _ = game.current_bid
+                for card_type in self.opponent_model['hand_belief']:
+                    if card_type == doubted_claim_type:
+                        self.opponent_model['hand_belief'][card_type] *= 0.8
+                    else:
+                        self.opponent_model['hand_belief'][card_type] *= 1.02
+                # normalize belief
+                total_belief = sum(self.opponent_model['hand_belief'].values())
+                if total_belief > 0:
+                    for card_type in self.opponent_model['hand_belief']:
+                        self.opponent_model[
+                            'hand_belief'][card_type] /= total_belief * 6
+
+    def simulate_opponent_doubt_decision(self, game: 'GameManager',
+                                         opponent_hand_sample: list[str],
+                                         current_bid: tuple[str, int]) -> str:
+        """
+        Simulate the opponent's doubt decision based on a hypothetical hand.
+        This directly uses a simplified version of the ZeroOrderAgent's logic.
 
         :param game: the game manager.
-        :return: 'claim' if the agent makes a claim, 'doubt' otherwise.
+        :param opponent_hand_sample: a sample of the opponent's hand.
+        :param current_bid: the current bid to evaluate.
+        :param player: the player making the claim.
+        :return: 'doubt' or 'pass' based on the simulated decision.
         """
-        self.interpret_opponent_behavior()
-        if game.current_bid is None:
+        if current_bid is None:
+            return 'pass'
+
+        claim_type, claim_value = current_bid
+        hand_counts = defaultdict(int)
+        for card in opponent_hand_sample:
+            hand_counts[card] += 1
+
+        expected_cards_in_hand = (
+            hand_counts.get(claim_type, 0) + hand_counts.get('HUP', 0))
+
+        return 'doubt' if claim_value > expected_cards_in_hand + 1 else 'pass'
+
+    def predict_opponent_reaction(self, game: 'GameManager',
+                                  hypothetical_claim: tuple[str, int]) -> str:
+        """
+        Predict the opponent's reaction to a hypothetical claim
+        by simulating their decision process. This involves sampling
+        from our belief about their hand and using their (ToM0) logic.
+
+        :param game: the game manager.
+        :param hypothetical_claim: the claim to evaluate.
+        :return: 'doubt' or 'claim' based on the predicted reaction.
+        """
+        doubt_outcomes = []
+        num_simulations = 100
+
+        # sample hypothetical hands from our belief distribution
+        possible_cards = []
+        for card_type, belief in self.opponent_model['hand_belief'].items():
+            possible_cards.extend([card_type] * int(belief * 10))
+
+        if not possible_cards:
             return 'claim'
+
+        for _ in range(num_simulations):
+            sampled_hand = random.sample(
+                possible_cards, min(6, len(possible_cards)))
+            reaction = self.simulate_opponent_doubt_decision(
+                game, sampled_hand, hypothetical_claim)
+            doubt_outcomes.append(reaction == 'doubt')
+
+        # predict 'doubt'
+        # if a significant proportion of simulations resulted in doubt
+        if sum(doubt_outcomes) / num_simulations > 0.6:
+            return 'doubt'
         else:
-            current_claim_value = game.current_bid[1]
-            if self.predict_opponent_reaction(current_claim_value):
-                return 'doubt'
-            else:
-                return 'claim'
+            return 'claim'
+
+    def make_claim(self,
+                   current_bid: Optional[tuple[str, int]]) -> ClaimTuple:
+        """
+        Make a claim based on both the base hand/memory
+        logic and recursive reasoning that considers what
+        the opponent likely holds and how they might react.
+
+        :param current_bid: the current bid to beat.
+        :return: a tuple of claim type, claim value, and cards to reveal.
+        """
+        base_result = super().make_claim(current_bid)
+        if base_result is None:
+            return None
+        claim_type, claim_value, cards_to_reveal = base_result
+
+        # predictive model
+        predicted_reaction = self.predict_opponent_reaction(
+            self.game_ref, (claim_type, claim_value))
+
+        # adjust claim based on predicted reaction
+        if predicted_reaction == 'doubt':
+            if claim_value > 1:
+                weaker_claim = (claim_type, claim_value - 1)
+                if current_bid is None or \
+                    self.game_ref.is_stronger_claim(
+                        weaker_claim[0], weaker_claim[1]):
+                    predicted_reaction_weaker = self.predict_opponent_reaction(
+                        self.game_ref, weaker_claim)
+                    if predicted_reaction_weaker == 'claim':
+                        return (
+                            weaker_claim[0], weaker_claim[1], cards_to_reveal)
+
+            card_counts = defaultdict(int)
+            for card in self.hand:
+                if card in {'alive_cats', 'dead_cats', 'empty_boxes'} and \
+                   card != claim_type:
+                    card_counts[card] += 1
+            if card_counts:
+                alternative_claim_type = max(card_counts, key=card_counts.get)
+                alternative_claim_value = card_counts[alternative_claim_type]
+                if current_bid is None or \
+                    self.game_ref.is_stronger_claim(
+                        alternative_claim_type, alternative_claim_value):
+                    return (alternative_claim_type,
+                            alternative_claim_value, cards_to_reveal)
 
 
 Agent = Union[ZeroOrderAgent, FirstOrderAgent]
@@ -288,9 +425,9 @@ class GameManager:
             'empty_boxes': 8,
             'HUP': 4
         }
-        self.players = [agent_types[0](0)]  # first player
+        self.players = [agent_types[0](0)]
         for i in range(1, num_players):
-            self.players.append(agent_types[1](i))  # other players
+            self.players.append(agent_types[1](i))
         self.current_bid = None
         self.current_player = 0
         self.central_pile = []
@@ -545,7 +682,7 @@ def evaluate_agents(num_games: int) -> None:
 
     plt.tight_layout()
     plt.savefig(fig_dir / 'win_bar_plots.png')
-    plt.show()
+    plt.close()
 
     # plot learning curves
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
@@ -574,7 +711,7 @@ def evaluate_agents(num_games: int) -> None:
 
     plt.tight_layout()
     plt.savefig(fig_dir / 'learning_curves.png')
-    plt.show()
+    plt.close()
 
 
-evaluate_agents(1000)
+evaluate_agents(5000)
